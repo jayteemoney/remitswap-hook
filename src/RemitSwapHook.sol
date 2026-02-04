@@ -387,7 +387,10 @@ contract RemitSwapHook is BaseHook, IRemitSwapHook, Ownable, ReentrancyGuard {
         RemittanceStorage storage remit = remittances[remittanceId];
 
         if (remit.id == 0) revert RemittanceNotFound();
-        if (remit.status != RemitTypes.Status.Active) revert RemittanceNotActive();
+        // Allow claiming from both Active and Expired status (for multiple contributors)
+        if (remit.status != RemitTypes.Status.Active && remit.status != RemitTypes.Status.Expired) {
+            revert RemittanceNotActive();
+        }
         if (remit.expiresAt == 0 || block.timestamp < remit.expiresAt) revert RemittanceNotExpired();
 
         uint256 contribution = remit.contributions[msg.sender];

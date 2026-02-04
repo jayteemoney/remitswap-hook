@@ -100,6 +100,9 @@ contract RemitSwapHookTest is HookTest {
     }
 
     function test_CreateRemittance_RevertIfPastExpiry() public {
+        // Warp to a later time to ensure we have a valid past timestamp
+        vm.warp(1000);
+
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSignature("InvalidExpiry()"));
         hook.createRemittance(recipient, TARGET_AMOUNT, block.timestamp - 1, bytes32(0), true);
@@ -378,10 +381,11 @@ contract RemitSwapHookTest is HookTest {
     // ============ Fuzz Tests ============
 
     function testFuzz_Contribute(uint256 amount) public {
-        // Bound amount to reasonable range
-        amount = bound(amount, 1e6, 100_000 * 1e6);
+        // Bound amount to reasonable range (within daily limit)
+        amount = bound(amount, 1e6, DEFAULT_DAILY_LIMIT);
 
-        uint256 remittanceId = _createRemittance(alice, recipient, TARGET_AMOUNT * 1000);
+        // Use a target amount within daily limit for compliance
+        uint256 remittanceId = _createRemittance(alice, recipient, DEFAULT_DAILY_LIMIT);
 
         usdt.mint(bob, amount);
 
@@ -391,7 +395,8 @@ contract RemitSwapHookTest is HookTest {
     }
 
     function testFuzz_FeeCalculation(uint256 amount, uint256 feeBps) public {
-        amount = bound(amount, 1e6, 1_000_000 * 1e6);
+        // Bound amount to within daily limit to pass compliance
+        amount = bound(amount, 1e6, DEFAULT_DAILY_LIMIT);
         feeBps = bound(feeBps, 0, 500);
 
         hook.setPlatformFee(feeBps);
