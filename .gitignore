@@ -1,0 +1,24 @@
+# Compiler files
+cache/
+out/
+
+# Ignores development broadcast logs
+broadcast/
+
+# Docs
+docs/
+
+# Dotenv file
+.env
+
+# Dependencies
+lib/
+
+# Coverage
+lcov.info
+
+# VSCode
+.vscode/
+
+# Foundry cache
+.forge-cache/
