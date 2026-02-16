@@ -378,7 +378,179 @@ contract RemitSwapHookTest is HookTest {
         assertTrue(hook.autoReleaseEnabled());
     }
 
+    // ============ Additional Error Case Tests ============
+
+    function test_ContributeDirectly_RevertIfRemittanceCancelled() public {
+        uint256 remittanceId = _createRemittance(alice, recipient, TARGET_AMOUNT);
+        _contribute(bob, remittanceId, CONTRIBUTION_AMOUNT);
+
+        // Cancel
+        _cancel(alice, remittanceId);
+
+        vm.prank(charlie);
+        vm.expectRevert(abi.encodeWithSignature("RemittanceNotActive()"));
+        hook.contributeDirectly(remittanceId, CONTRIBUTION_AMOUNT);
+    }
+
+    function test_ContributeDirectly_RevertIfRemittanceReleased() public {
+        uint256 remittanceId = _createRemittance(alice, recipient, TARGET_AMOUNT);
+        _contribute(bob, remittanceId, TARGET_AMOUNT); // Auto-releases
+
+        vm.prank(charlie);
+        vm.expectRevert(abi.encodeWithSignature("RemittanceNotActive()"));
+        hook.contributeDirectly(remittanceId, CONTRIBUTION_AMOUNT);
+    }
+
+    function test_ContributeDirectly_RevertIfZeroAmount() public {
+        uint256 remittanceId = _createRemittance(alice, recipient, TARGET_AMOUNT);
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSignature("InvalidAmount()"));
+        hook.contributeDirectly(remittanceId, 0);
+    }
+
+    function test_ContributeDirectly_UpdatesBalance() public {
+        uint256 remittanceId = _createRemittance(alice, recipient, TARGET_AMOUNT);
+
+        _contribute(bob, remittanceId, CONTRIBUTION_AMOUNT);
+        assertEq(hook.getContribution(remittanceId, bob), CONTRIBUTION_AMOUNT);
+
+        _contribute(bob, remittanceId, CONTRIBUTION_AMOUNT);
+        assertEq(hook.getContribution(remittanceId, bob), CONTRIBUTION_AMOUNT * 2);
+
+        RemitTypes.RemittanceView memory remit = hook.getRemittance(remittanceId);
+        assertEq(remit.currentAmount, CONTRIBUTION_AMOUNT * 2);
+    }
+
+    function test_ContributeDirectly_TracksContributorList() public {
+        uint256 remittanceId = _createRemittance(alice, recipient, TARGET_AMOUNT);
+
+        _contribute(bob, remittanceId, CONTRIBUTION_AMOUNT);
+        _contribute(charlie, remittanceId, CONTRIBUTION_AMOUNT);
+        _contribute(bob, remittanceId, CONTRIBUTION_AMOUNT); // second contribution, should not add again
+
+        RemitTypes.RemittanceView memory remit = hook.getRemittance(remittanceId);
+        assertEq(remit.contributorList.length, 2);
+        assertEq(remit.contributorList[0], bob);
+        assertEq(remit.contributorList[1], charlie);
+    }
+
+    function test_Release_RevertIfAlreadyReleased() public {
+        // Create with auto-release disabled for manual release
+        vm.prank(alice);
+        uint256 remittanceId = hook.createRemittance(recipient, TARGET_AMOUNT, 0, bytes32(0), false);
+        _contribute(bob, remittanceId, TARGET_AMOUNT);
+
+        _release(recipient, remittanceId);
+
+        vm.prank(recipient);
+        vm.expectRevert(abi.encodeWithSignature("RemittanceNotActive()"));
+        hook.releaseRemittance(remittanceId);
+    }
+
+    function test_Release_CalculatesFeeCorrectly() public {
+        vm.prank(alice);
+        uint256 remittanceId = hook.createRemittance(recipient, TARGET_AMOUNT, 0, bytes32(0), false);
+        _contribute(bob, remittanceId, TARGET_AMOUNT);
+
+        uint256 recipientBefore = _getBalance(recipient);
+        uint256 feeBefore = _getBalance(feeCollector);
+
+        _release(recipient, remittanceId);
+
+        uint256 expectedFee = (TARGET_AMOUNT * PLATFORM_FEE_BPS) / 10_000;
+        uint256 expectedRecipient = TARGET_AMOUNT - expectedFee;
+
+        assertEq(_getBalance(recipient) - recipientBefore, expectedRecipient);
+        assertEq(_getBalance(feeCollector) - feeBefore, expectedFee);
+        assertEq(expectedFee, 5 * 1e6); // 0.5% of 1000 USDT = 5 USDT
+    }
+
+    function test_Release_TransfersToRecipient() public {
+        vm.prank(alice);
+        uint256 remittanceId = hook.createRemittance(recipient, TARGET_AMOUNT, 0, bytes32(0), false);
+        _contribute(bob, remittanceId, TARGET_AMOUNT);
+
+        uint256 recipientBefore = _getBalance(recipient);
+        _release(recipient, remittanceId);
+
+        uint256 expectedFee = _calculateFee(TARGET_AMOUNT);
+        assertEq(_getBalance(recipient) - recipientBefore, TARGET_AMOUNT - expectedFee);
+    }
+
+    function test_Release_TransfersFeeToCollector() public {
+        vm.prank(alice);
+        uint256 remittanceId = hook.createRemittance(recipient, TARGET_AMOUNT, 0, bytes32(0), false);
+        _contribute(bob, remittanceId, TARGET_AMOUNT);
+
+        uint256 feeBefore = _getBalance(feeCollector);
+        _release(recipient, remittanceId);
+
+        uint256 expectedFee = _calculateFee(TARGET_AMOUNT);
+        assertEq(_getBalance(feeCollector) - feeBefore, expectedFee);
+    }
+
+    function test_Cancel_RefundsAllContributors() public {
+        uint256 remittanceId = _createRemittance(alice, recipient, TARGET_AMOUNT);
+        _contribute(bob, remittanceId, CONTRIBUTION_AMOUNT);
+        _contribute(charlie, remittanceId, CONTRIBUTION_AMOUNT * 2);
+
+        uint256 bobBefore = _getBalance(bob);
+        uint256 charlieBefore = _getBalance(charlie);
+
+        _cancel(alice, remittanceId);
+
+        assertEq(_getBalance(bob) - bobBefore, CONTRIBUTION_AMOUNT);
+        assertEq(_getBalance(charlie) - charlieBefore, CONTRIBUTION_AMOUNT * 2);
+
+        // Contributions should be zeroed out
+        assertEq(hook.getContribution(remittanceId, bob), 0);
+        assertEq(hook.getContribution(remittanceId, charlie), 0);
+    }
+
+    function test_Cancel_RefundsCorrectAmounts() public {
+        uint256 remittanceId = _createRemittance(alice, recipient, TARGET_AMOUNT);
+
+        uint256 amount1 = 50 * 1e6;
+        uint256 amount2 = 150 * 1e6;
+        uint256 amount3 = 75 * 1e6;
+
+        _contribute(bob, remittanceId, amount1);
+        _contribute(charlie, remittanceId, amount2);
+        _contribute(bob, remittanceId, amount3); // Bob contributes again
+
+        uint256 bobBefore = _getBalance(bob);
+        uint256 charlieBefore = _getBalance(charlie);
+
+        _cancel(alice, remittanceId);
+
+        // Bob should get amount1 + amount3 back
+        assertEq(_getBalance(bob) - bobBefore, amount1 + amount3);
+        // Charlie should get amount2 back
+        assertEq(_getBalance(charlie) - charlieBefore, amount2);
+    }
+
     // ============ Fuzz Tests ============
+
+    function testFuzz_MultipleContributions(uint8 numContributions) public {
+        numContributions = uint8(bound(numContributions, 1, 10));
+
+        vm.prank(alice);
+        uint256 remittanceId = hook.createRemittance(recipient, DEFAULT_DAILY_LIMIT, 0, bytes32(0), false);
+
+        uint256 totalContributed = 0;
+        uint256 perContribution = 100 * 1e6; // 100 USDT each
+
+        for (uint8 i = 0; i < numContributions; i++) {
+            _contribute(bob, remittanceId, perContribution);
+            totalContributed += perContribution;
+        }
+
+        RemitTypes.RemittanceView memory remit = hook.getRemittance(remittanceId);
+        assertEq(remit.currentAmount, totalContributed);
+        assertEq(hook.getContribution(remittanceId, bob), totalContributed);
+        assertEq(remit.contributorList.length, 1); // same contributor
+    }
 
     function testFuzz_Contribute(uint256 amount) public {
         // Bound amount to reasonable range (within daily limit)
