@@ -8,9 +8,11 @@ import { HookMiner } from "v4-periphery/src/utils/HookMiner.sol";
 
 import { RemitSwapHook } from "../src/RemitSwapHook.sol";
 import { AllowlistCompliance } from "../src/compliance/AllowlistCompliance.sol";
+import { WorldcoinCompliance } from "../src/compliance/WorldcoinCompliance.sol";
 import { PhoneNumberResolver } from "../src/compliance/PhoneNumberResolver.sol";
 import { ICompliance } from "../src/interfaces/ICompliance.sol";
 import { IPhoneNumberResolver } from "../src/interfaces/IPhoneNumberResolver.sol";
+import { IWorldID } from "../src/interfaces/IWorldID.sol";
 
 /// @title DeployRemitSwapHook
 /// @notice Deployment script for RemitSwapHook and supporting contracts
@@ -30,9 +32,13 @@ contract DeployRemitSwapHook is Script {
     // USDC on Base (alternative stablecoin)
     address constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
 
+    // World ID Router on Optimism (used for World ID verification)
+    // Note: World ID is not natively on Base; bridge integration or Optimism deployment required
+    address constant OPTIMISM_WORLD_ID_ROUTER = 0x57f928158C3EE7CDad1e4D8642503c4D0201f611;
+
     // ============ Deployment State ============
 
-    AllowlistCompliance public compliance;
+    ICompliance public compliance;
     PhoneNumberResolver public phoneResolver;
     RemitSwapHook public hook;
 
@@ -70,11 +76,26 @@ contract DeployRemitSwapHook is Script {
         console.log("Supported Token:", supportedToken);
         console.log("Fee Collector:", feeCollector);
 
+        // Determine compliance type
+        string memory complianceType = vm.envOr("COMPLIANCE_TYPE", string("allowlist"));
+
         vm.startBroadcast(deployerPrivateKey);
 
-        // 1. Deploy AllowlistCompliance
-        compliance = new AllowlistCompliance();
-        console.log("AllowlistCompliance deployed at:", address(compliance));
+        // 1. Deploy Compliance module (allowlist or worldcoin)
+        if (keccak256(bytes(complianceType)) == keccak256("worldcoin")) {
+            address worldIdRouter = vm.envOr("WORLD_ID_ROUTER", OPTIMISM_WORLD_ID_ROUTER);
+            string memory worldAppId = vm.envOr("WORLD_APP_ID", string("remitswap"));
+            WorldcoinCompliance worldcoinCompliance = new WorldcoinCompliance(
+                IWorldID(worldIdRouter),
+                worldAppId
+            );
+            compliance = ICompliance(address(worldcoinCompliance));
+            console.log("WorldcoinCompliance deployed at:", address(compliance));
+        } else {
+            AllowlistCompliance allowlistCompliance = new AllowlistCompliance();
+            compliance = ICompliance(address(allowlistCompliance));
+            console.log("AllowlistCompliance deployed at:", address(compliance));
+        }
 
         // 2. Deploy PhoneNumberResolver
         phoneResolver = new PhoneNumberResolver();
@@ -85,19 +106,24 @@ contract DeployRemitSwapHook is Script {
         console.log("RemitSwapHook deployed at:", address(hook));
 
         // 4. Configure compliance to accept hook
-        compliance.setHook(address(hook));
-        console.log("Compliance configured with hook");
-
-        // 5. Add deployer to allowlist for testing
-        compliance.addToAllowlist(vm.addr(deployerPrivateKey), 0);
-        console.log("Deployer added to allowlist");
+        if (keccak256(bytes(complianceType)) == keccak256("worldcoin")) {
+            WorldcoinCompliance(address(compliance)).setHook(address(hook));
+            console.log("WorldcoinCompliance configured with hook");
+            console.log("Note: Users must verify via World ID before transacting");
+        } else {
+            AllowlistCompliance(address(compliance)).setHook(address(hook));
+            AllowlistCompliance(address(compliance)).addToAllowlist(vm.addr(deployerPrivateKey), 0);
+            console.log("AllowlistCompliance configured with hook");
+            console.log("Deployer added to allowlist");
+        }
 
         vm.stopBroadcast();
 
         // Log deployment summary
         console.log("\n========== DEPLOYMENT SUMMARY ==========");
         console.log("Chain ID:", chainId);
-        console.log("AllowlistCompliance:", address(compliance));
+        console.log("Compliance Type:", complianceType);
+        console.log("Compliance:", address(compliance));
         console.log("PhoneNumberResolver:", address(phoneResolver));
         console.log("RemitSwapHook:", address(hook));
         console.log("=========================================\n");

@@ -6,7 +6,9 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { RemitSwapHook } from "../src/RemitSwapHook.sol";
 import { AllowlistCompliance } from "../src/compliance/AllowlistCompliance.sol";
+import { WorldcoinCompliance } from "../src/compliance/WorldcoinCompliance.sol";
 import { PhoneNumberResolver } from "../src/compliance/PhoneNumberResolver.sol";
+import { ICompliance } from "../src/interfaces/ICompliance.sol";
 
 /// @title SetupDemo
 /// @notice Script to set up demo data for UHI8 presentation
